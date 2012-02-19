@@ -3,7 +3,7 @@
 -compile(export_all).
 
 start(PrintFun) ->
-	spawn(message_router, route_messages, []).
+	spawn(message_router, route_messages, [PrintFun]).
 
 stop(RouterPid) ->
 	RouterPid ! shutdown.
@@ -17,7 +17,8 @@ route_messages(PrintFun) ->
 			Addressee ! {recv_chat_msg, MessageBody},
 			route_messages(PrintFun);
 		{recv_chat_msg, MessageBody} ->	
-		 	PrintFun(MessageBody);
+		 	PrintFun(MessageBody),
+			route_messages(PrintFun);
 		shutdown ->
 			io:format("router: shutting down~n");
 		Oops -> 
