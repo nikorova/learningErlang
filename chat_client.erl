@@ -2,11 +2,24 @@
 
 -compile(export_all).
 
-send_message(RouterPid, Addressee, MessageBody) ->
-	message_router:send_chat_message(RouterPid, Addressee, MessageBody).
+register_nickname(NickName) ->
+	Pid = spawn(chat_client, handle_messages, [NickName]),
+	message_router:register_nick(NickName, Pid ).
 
-print_message(MessageBody) ->
-	io:format("router: received ~p~n", [MessageBody]).
+unregister_nickname(NickName) -> 
+	message_router:unregister_nick(NickName).
+
+send_message(Addressee, MessageBody) ->
+	message_router:send_chat_message(Addressee, MessageBody).
+
+handle_messages(NickName) ->
+	receive 
+			{print_msg, MessageBody} ->
+				io:format("~p received: ~p~n", [NickName, MessageBody]),
+				handle_messages(NickName);
+			stop ->
+				ok
+	end.
 
 start_router() ->
-	message_router:start(fun chat_client:print_message/1).
+	message_router:start().
