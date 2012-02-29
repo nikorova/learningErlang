@@ -1,8 +1,5 @@
 -module(message_router).
 
-% constant defined a la C
-%-define(SERVER, message_router).
-
 -compile([export_all]).
 
 start() ->
