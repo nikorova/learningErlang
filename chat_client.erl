@@ -1,10 +1,10 @@
 -module(chat_client).
 
--compile(export_all).
+-compile([export_all]).
 
 register_nickname(NickName) ->
 	Pid = spawn(chat_client, handle_messages, [NickName]),
-	message_router:register_nick(NickName, Pid ).
+	message_router:register_nick(NickName, Pid).
 
 unregister_nickname(NickName) -> 
 	message_router:unregister_nick(NickName).

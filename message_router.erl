@@ -1,40 +1,24 @@
 -module(message_router).
 
--define(SERVER, message_router).
+% constant defined a la C
+%-define(SERVER, message_router).
 
--compile(export_all).
+-compile([export_all]).
 
 start() ->
-	global:trans({?SERVER, ?SERVER}, 
-		fun() -> 
-			case global:whereis_name(?SERVER) of
-				undefinded ->
-					Pid = spawn(message_router, route_messages, [dict:new()]),
-					global:register_name(?SERVER, Pid);
-				_ -> 
-					ok
-			end
-		end).
+	server_util:start(message_router, {message_router, route_messages, [dict:new()]}).
 
 stop() ->
-	global:trans({?SERVER, ?SERVER}, 
-		fun() -> 
-			case global:whereis_name(?SERVER) of
-				undefinded ->
-					ok;
-				_ -> 
-					global:send_message(?SERVER, shutdown)
-			end
-		end).
+	server_util:stop(message_router).
 	
 send_chat_message(Addressee, MessageBody) ->
-	global:send_message(?SERVER, {send_chat_msg, Addressee, MessageBody}).
+	global:send(message_router, {send_chat_msg, Addressee, MessageBody}).
 
 register_nick(ClientName, ClientPid) ->
-	global:send_message(?SERVER, {register_nick, ClientName, ClientPid}).
+	global:send(message_router, {register_nick, ClientName, ClientPid}).
 
 unregister_nick(ClientName) ->	
-	global:send_message(?SERVER, {unregister_nick, ClientName}).
+	global:send(message_router, {unregister_nick, ClientName}).
 
 route_messages(Clients) ->
 	receive
@@ -56,8 +40,7 @@ route_messages(Clients) ->
 				error ->
 					io:format("unknown client: ~p~n", [ClientName]),
 					route_messages(Clients)
-			end,
-			route_messages(dict:erase(ClientName, Clients));
+			end;
 		shutdown ->
 			io:format("router: shutting down~n");
 		BadMessage -> 
