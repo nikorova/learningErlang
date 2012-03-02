@@ -8,7 +8,8 @@ start(ServerName, {Module, Function, Args}) ->
 			case global:whereis_name(ServerName) of
 					undefined ->
 						Pid = spawn(Module, Function, Args),
-						global:register_name(ServerName, Pid);
+						global:register_name(ServerName, Pid),
+						io:format("~p is alive at ~p~n", [ServerName, Pid]);
 					_ -> 
 						ok
 			end

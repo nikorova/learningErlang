@@ -3,10 +3,12 @@
 -compile([export_all]).
 
 start() ->
-	server_util:start(message_router, {message_router, route_messages, [dict:new()]}).
+	server_util:start(message_router, {message_router, route_messages, [dict:new()]}),
+	message_store:start().
 
 stop() ->
-	server_util:stop(message_router).
+	server_util:stop(message_router),
+	message_store:stop().
 	
 send_chat_message(Addressee, MessageBody) ->
 	global:send(message_router, {send_chat_msg, Addressee, MessageBody}).
@@ -24,11 +26,16 @@ route_messages(Clients) ->
 				{ok, ClientPid} ->
 					ClientPid ! {print_msg, MessageBody};
 				error ->
-					io:format("unknown client: ~p~n", [ClientName])
+					message_store:save_message(ClientName, MessageBody),
+					io:format("message saved for ~p~n", [ClientName])
 			end,
 			route_messages(Clients);
+		
 		{register_nick, ClientName, ClientPid} -> 
+		 	Messages = message_store:find_messages(ClientName),
+		 	lists:foreach(fun(Msg) -> ClientPid ! {print_msg, Msg} end, Messages),
 		 	route_messages(dict:store(ClientName, ClientPid, Clients));
+		
 		{unregister_nick, ClientName} ->
 			case dict:find(ClientName, Clients) of
 				{ok, ClientPid} -> 
@@ -38,8 +45,10 @@ route_messages(Clients) ->
 					io:format("unknown client: ~p~n", [ClientName]),
 					route_messages(Clients)
 			end;
+		
 		shutdown ->
 			io:format("router: shutting down~n");
+		
 		BadMessage -> 
 			io:format("router: ah! received ~p~n", [BadMessage]),
 			route_messages(Clients)
