@@ -2,22 +2,24 @@
 
 -compile([export_all]).
 
+-define(SERVER, message_router).
+
 start() ->
-	server_util:start(message_router, {message_router, route_messages, [dict:new()]}),
+	server_util:start(?SERVER, {message_router, route_messages, [dict:new()]}),
 	message_store:start().
 
 stop() ->
-	server_util:stop(message_router),
+	server_util:stop(?SERVER),
 	message_store:stop().
 	
 send_chat_message(Addressee, MessageBody) ->
-	global:send(message_router, {send_chat_msg, Addressee, MessageBody}).
+	global:send(?SERVER, {send_chat_msg, Addressee, MessageBody}).
 
 register_nick(ClientName, ClientPid) ->
-	global:send(message_router, {register_nick, ClientName, ClientPid}).
+	global:send(?SERVER, {register_nick, ClientName, ClientPid}).
 
 unregister_nick(ClientName) ->	
-	global:send(message_router, {unregister_nick, ClientName}).
+	global:send(?SERVER, {unregister_nick, ClientName}).
 
 route_messages(Clients) ->
 	receive
