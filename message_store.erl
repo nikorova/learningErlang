@@ -11,10 +11,6 @@
 		message_body,
 		timestamp}).
 
-%% for debugging 
-send_test_message(Message) ->
-	global:send(?SERVER, {test_message, Message}).
-
 save_message(Addressee, MessageBody) ->
 	global:send(?SERVER, {save_message, Addressee, MessageBody}).
 
@@ -44,7 +40,6 @@ get_messages(Addressee) ->
 		Results = qlc:e(Query),
 		delete_messages(Results),
 		lists:map(fun(Msg) -> Msg#chat_message.message_body end, Results)
-		%Results 
 	end,
 	{atomic, Messages} = mnesia:transaction(F),
 	Messages.
@@ -81,10 +76,8 @@ run(FirstTime) ->
 					Messages = get_messages(Addressee),
 					Pid ! {ok, Messages},
 					run(FirstTime);
-				{test_message, Message} ->
-					io:format("bloody nice day for a message, eh?~n~p~n", [Message]);
 				 shutdown ->
 				 	mnesia:stop(),
-				 	io:format("i go to my death...~n")
+				 	io:format("message_store: i go to my death...~n")
 			end
 	end.

@@ -49,7 +49,7 @@ route_messages(Clients) ->
 			end;
 		
 		shutdown ->
-			io:format("router: shutting down~n");
+			io:format("message_router: crapping out...~n");
 		
 		BadMessage -> 
 			io:format("router: ah! received ~p~n", [BadMessage]),
