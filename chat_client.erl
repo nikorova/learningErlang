@@ -15,7 +15,7 @@ send_message(Addressee, MessageBody) ->
 handle_messages(NickName) ->
 	receive 
 			{print_msg, MessageBody} ->
-				io:format("~p received: ~p~n", [NickName, MessageBody]),
+				io:format("received:~n	~p~n", [MessageBody]),
 				handle_messages(NickName);
 			stop ->
 				ok

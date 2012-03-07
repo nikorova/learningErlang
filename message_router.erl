@@ -32,7 +32,7 @@ route_messages(Clients) ->
 			route_messages(Clients);
 		
 		{register_nick, ClientName, ClientPid} -> 
-		 	Messages = message_store:find_messages(ClientName),
+		 	Messages = message_store:find_message(ClientName),
 		 	lists:foreach(fun(Msg) -> ClientPid ! {print_msg, Msg} end, Messages),
 		 	route_messages(dict:store(ClientName, ClientPid, Clients));
 		

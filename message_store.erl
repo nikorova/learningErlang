@@ -11,8 +11,12 @@
 		message_body,
 		timestamp}).
 
+%% for debugging 
+send_test_message(Message) ->
+	global:send(?SERVER, {test_message, Message}).
+
 save_message(Addressee, MessageBody) ->
-	global:send(?SERVER, {save_msg, Addressee, MessageBody}).
+	global:send(?SERVER, {save_message, Addressee, MessageBody}).
 
 find_message(Addressee) ->
 	global:send(?SERVER, {find_msgs, Addressee, self()}),
@@ -29,19 +33,21 @@ stop() ->
 
 delete_messages(Messages) ->
 	F = fun() ->
-		lists:foreach(fun(Msg) -> mnesia:delete_object(Msg) end, Messages) end,
+		lists:foreach(fun(Msg) -> mnesia:delete_object(Msg) end, Messages) 
+	end,
 	mnesia:transaction(F).
 
 get_messages(Addressee) ->
 	F = fun() ->
-			Query = qlc:q([M#chat_message.message_body || M <- mnesia:table(chat_message),
-								M#chat_message.addressee =:= Addressee]),
-			Results = qlc:e(Query),
-			delete_messages(Results),
-			Results 
-		end,
-	{atomic, Message} = mnesia:transaction(F),
-	Message.
+		Query = qlc:q([M || M <- mnesia:table(chat_message),
+			M#chat_message.addressee =:= Addressee]),
+		Results = qlc:e(Query),
+		delete_messages(Results),
+		lists:map(fun(Msg) -> Msg#chat_message.message_body end, Results)
+		%Results 
+	end,
+	{atomic, Messages} = mnesia:transaction(F),
+	Messages.
 
 store_message(Addressee, MessageBody) ->
 	F = fun() ->
@@ -75,6 +81,8 @@ run(FirstTime) ->
 					Messages = get_messages(Addressee),
 					Pid ! {ok, Messages},
 					run(FirstTime);
+				{test_message, Message} ->
+					io:format("bloody nice day for a message, eh?~n~p~n", [Message]);
 				 shutdown ->
 				 	mnesia:stop(),
 				 	io:format("i go to my death...~n")
