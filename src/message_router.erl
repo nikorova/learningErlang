@@ -1,57 +1,140 @@
+%%%-------------------------------------------------------------------
+%%% File        : message_router.erl
+%%% Description : routes messages for the chat application 
+%%%-------------------------------------------------------------------
 -module(message_router).
 
--compile([export_all]).
+-behaviour(gen_server).
 
--define(SERVER, message_router).
+%% API
+-export([start_link/0]).
 
-start() ->
-	server_util:start(?SERVER, {message_router, route_messages, [dict:new()]}),
-	message_store:start().
+-export([handle_chat_message/2, register_nick/2, unregister_nick/1, stop/0]).
+
+-define(SERVER, ?MODULE).
+
+%% gen_server callbacks
+-export([init/1, handle_call/3, handle_cast/2, handle_info/2,
+         terminate/2, code_change/3]).
+
+%%====================================================================
+%% API
+%%====================================================================
+%%--------------------------------------------------------------------
+%% Function: start_link() -> {ok,Pid} | ignore | {error,Error}
+%% Description: Starts the server
+%%--------------------------------------------------------------------
+start_link() ->
+	gen_server:start_link({global, ?SERVER}, ?MODULE, [], []).
 
 stop() ->
-	server_util:stop(?SERVER),
-	message_store:stop().
-	
-send_chat_message(Addressee, MessageBody) ->
-	global:send(?SERVER, {send_chat_msg, Addressee, MessageBody}).
+	gen_server:cast({global, ?SERVER}, stop).
+
+handle_chat_message(Addressee, MessageBody) ->
+	gen_server:call({global, ?SERVER}, {handle_chat_message, Addressee, MessageBody}).
 
 register_nick(ClientName, ClientPid) ->
-	global:send(?SERVER, {register_nick, ClientName, ClientPid}).
+	gen_server:call({global, ?SERVER}, {register_nick, ClientName, ClientPid}).
 
-unregister_nick(ClientName) ->	
-	global:send(?SERVER, {unregister_nick, ClientName}).
+unregister_nick(ClientName) ->
+	gen_server:call({global, ?SERVER}, {unregister_nick, ClientName}).
 
-route_messages(Clients) ->
-	receive
-		{send_chat_msg, ClientName, MessageBody} ->
-			case dict:find(ClientName, Clients) of
-				{ok, ClientPid} ->
-					ClientPid ! {print_msg, MessageBody};
-				error ->
-					message_store:save_message(ClientName, MessageBody),
-					io:format("message saved for ~p~n", [ClientName])
-			end,
-			route_messages(Clients);
-		
-		{register_nick, ClientName, ClientPid} -> 
-		 	Messages = message_store:find_message(ClientName),
-		 	lists:foreach(fun(Msg) -> ClientPid ! {print_msg, Msg} end, Messages),
-		 	route_messages(dict:store(ClientName, ClientPid, Clients));
-		
-		{unregister_nick, ClientName} ->
-			case dict:find(ClientName, Clients) of
-				{ok, ClientPid} -> 
-					ClientPid ! stop,
-					route_messages(dict:erase(ClientName, Clients));
-				error ->
-					io:format("unknown client: ~p~n", [ClientName]),
-					route_messages(Clients)
-			end;
-		
-		shutdown ->
-			io:format("message_router: crapping out...~n");
-		
-		BadMessage -> 
-			io:format("router: ah! received ~p~n", [BadMessage]),
-			route_messages(Clients)
-	end.
+
+%%====================================================================
+%% gen_server callbacks
+%%====================================================================
+
+%%--------------------------------------------------------------------
+%% Function: init(Args) -> {ok, State} |
+%%                         {ok, State, Timeout} |
+%%                         ignore               |
+%%                         {stop, Reason}
+%% Description: Initiates the server
+%%--------------------------------------------------------------------
+init([]) ->
+	message_store:start_link(),
+	{ok, dict:new()}.
+
+%%--------------------------------------------------------------------
+%% Function: %% handle_call(Request, From, State) -> {reply, Reply, State} |
+%%                                      {reply, Reply, State, Timeout} |
+%%                                      {noreply, State} |
+%%                                      {noreply, State, Timeout} |
+%%                                      {stop, Reason, Reply, State} |
+%%                                      {stop, Reason, State}
+%% Description: Handling call messages
+%%--------------------------------------------------------------------
+handle_call({unregister_nick, ClientName}, _From, Clients) ->
+	case dict:find(ClientName, Clients) of 
+		{ok, ClientPid} ->
+			ClientPid ! stop,
+			dict:erase(ClientName, Clients);
+		error ->
+			io:format("unkown client: ~p~n", [ClientName]),
+			Clients			
+	end,
+	{reply, ok, Clients};
+
+handle_call({register_nick, ClientName, ClientPid}, _From, Clients) ->
+	Messages = message_store:find_message(ClientName), 
+	lists:foreach(fun(Msg) -> ClientPid ! {print_msg, Msg} end, Messages),
+	{reply, ok, dict:store(ClientName, ClientPid, Clients)};
+
+handle_call({handle_chat_message, ClientName, MessageBody}, _From, Clients) ->
+	case dict:find(ClientName, Clients) of 
+		{ok, ClientPid} -> 
+			ClientPid ! {print_msg, MessageBody};
+		error ->
+			message_store:save_message(ClientName, MessageBody),
+			io:format("message saved for ~p~n", [ClientName])
+	end,
+	{reply, ok, Clients};
+
+handle_call(_Request, _From, State) ->
+	Reply = ok,
+	{reply, Reply, State}.
+
+%%--------------------------------------------------------------------
+%% Function: handle_cast(Msg, State) -> {noreply, State} |
+%%                                      {noreply, State, Timeout} |
+%%                                      {stop, Reason, State}
+%% Description: Handling cast messages
+%%--------------------------------------------------------------------
+
+handle_cast(stop, State) ->
+	message_store:shutdown(),
+	{stop, normal, State};
+
+handle_cast(_Msg, State) ->
+	{noreply, State}.
+
+%%--------------------------------------------------------------------
+%% Function: handle_info(Info, State) -> {noreply, State} |
+%%                                       {noreply, State, Timeout} |
+%%                                       {stop, Reason, State}
+%% Description: Handling all non call/cast messages
+%%--------------------------------------------------------------------
+handle_info(_Info, State) ->
+  {noreply, State}.
+
+%%--------------------------------------------------------------------
+%% Function: terminate(Reason, State) -> void()
+%% Description: This function is called by a gen_server when it is about to
+%% terminate. It should be the opposite of Module:init/1 and do any necessary
+%% cleaning up. When it returns, the gen_server terminates with Reason.
+%% The return value is ignored.
+%%--------------------------------------------------------------------
+terminate(_Reason, _State) ->
+  io:format("message_router going down...~n"),
+  ok.
+
+%%--------------------------------------------------------------------
+%% Func: code_change(OldVsn, State, Extra) -> {ok, NewState}
+%% Description: Convert process state when code is changed
+%%--------------------------------------------------------------------
+code_change(_OldVsn, State, _Extra) ->
+  {ok, State}.
+
+%%--------------------------------------------------------------------
+%%% Internal functions
+%%--------------------------------------------------------------------
