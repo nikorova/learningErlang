@@ -55,6 +55,8 @@ start_link() ->
 %% Description: Initiates the server
 %%--------------------------------------------------------------------
 init([]) ->
+	io:format("~p (~p) starting...~n", [?MODULE, self()]),
+	process_flag(trap_exit, true),
 	mnesia:create_schema([node()]),
 	mnesia:start(),
 	try
@@ -107,6 +109,7 @@ handle_cast(_Msg, State) ->
 %% Description: Handling all non call/cast messages
 %%--------------------------------------------------------------------
 handle_info(_Info, State) ->
+	io:format("~p (~p) starting...~n", [?MODULE, self()]),
 	{noreply, State}.
 
 %%--------------------------------------------------------------------

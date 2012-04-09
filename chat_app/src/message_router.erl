@@ -52,7 +52,8 @@ unregister_nick(ClientName) ->
 %% Description: Initiates the server
 %%--------------------------------------------------------------------
 init([]) ->
-	message_store:start_link(),
+	io:format("~p (~p) starting...~n", [?MODULE, self()]),
+	process_flag(trap_exit, true),
 	{ok, dict:new()}.
 
 %%--------------------------------------------------------------------
@@ -102,7 +103,6 @@ handle_call(_Request, _From, State) ->
 %%--------------------------------------------------------------------
 
 handle_cast(stop, State) ->
-	message_store:shutdown(),
 	{stop, normal, State};
 
 handle_cast(_Msg, State) ->
@@ -125,15 +125,16 @@ handle_info(_Info, State) ->
 %% The return value is ignored.
 %%--------------------------------------------------------------------
 terminate(_Reason, _State) ->
-  io:format("message_router going down...~n"),
-  ok.
+	message_store:shutdown(),
+	io:format("message_router going down...~n"),
+	ok.
 
 %%--------------------------------------------------------------------
 %% Func: code_change(OldVsn, State, Extra) -> {ok, NewState}
 %% Description: Convert process state when code is changed
 %%--------------------------------------------------------------------
 code_change(_OldVsn, State, _Extra) ->
-  {ok, State}.
+	{ok, State}.
 
 %%--------------------------------------------------------------------
 %%% Internal functions
