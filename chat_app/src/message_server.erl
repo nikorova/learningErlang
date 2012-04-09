@@ -1,26 +1,21 @@
 %%%-------------------------------------------------------------------
-%%% File        : message_store.erl
-%%% Description : message database server
+%%% File        : message_server.erl
+%%% Description : routes messages for the chat application 
 %%%-------------------------------------------------------------------
--module(message_store).
+-module(message_server).
 
 -behaviour(gen_server).
 
--include_lib("stdlib/include/qlc.hrl").
-
 %% API
--export([start_link/0, stop/0, save_message/2, find_message/1]).
+-export([start_link/0]).
 
--record(chat_message,
-		{addressee, 
-		message_body,
-		timestamp}).
+-export([handle_chat_message/2, register_nick/2, unregister_nick/1, stop/0]).
+
+-define(SERVER, ?MODULE).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3]).
-
--define(SERVER, ?MODULE).
 
 %%====================================================================
 %% API
@@ -30,19 +25,21 @@
 %% Description: Starts the server
 %%--------------------------------------------------------------------
 start_link() ->
-  gen_server:start_link({global, ?SERVER}, ?MODULE, [], []).
+	gen_server:start_link({global, ?SERVER}, ?MODULE, [], []).
 
- stop() -> 
- 	gen_server:cast({global, ?SERVER}, stop).
+stop() ->
+	gen_server:cast({global, ?SERVER}, stop).
 
- save_message(Addressee, MessageBody) ->
- 	gen_server:call({global, ?SERVER}, {save_message, Addressee, MessageBody}).
+handle_chat_message(Addressee, MessageBody) ->
+	gen_server:call({global, ?SERVER}, {handle_chat_message, Addressee, MessageBody}).
 
- find_message(Addressee) ->
- 	case gen_server:call({global, ?SERVER}, {find_msgs, Addressee}) of
- 		{ok, Messages} ->
- 			Messages
- 	end.
+register_nick(ClientName, ClientPid) ->
+	gen_server:call({global, ?SERVER}, {register_nick, ClientName, ClientPid}).
+
+unregister_nick(ClientName) ->
+	gen_server:call({global, ?SERVER}, {unregister_nick, ClientName}).
+
+
 %%====================================================================
 %% gen_server callbacks
 %%====================================================================
@@ -57,18 +54,7 @@ start_link() ->
 init([]) ->
 	io:format("~p (~p) starting...~n", [?MODULE, self()]),
 	process_flag(trap_exit, true),
-	mnesia:create_schema([node()]),
-	mnesia:start(),
-	try
-		mnesia:table_info(chat_message, type)
-	catch 
-		exit: _ ->
-			mnesia:create_table(chat_message, 
-				[{attributes, record_info(fields, chat_message)},
-				{type, bag}, 
-				{disc_copies, [node()]}] )
-	end,
-  {ok, []}.
+	{ok, dict:new()}.
 
 %%--------------------------------------------------------------------
 %% Function: %% handle_call(Request, From, State) -> {reply, Reply, State} |
@@ -79,16 +65,35 @@ init([]) ->
 %%                                      {stop, Reason, State}
 %% Description: Handling call messages
 %%--------------------------------------------------------------------
-handle_call({find_msgs, Addressee}, _From, State) ->
-	Messages = get_messages(Addressee), 
-	{reply, {ok, Messages}, State};
+handle_call({unregister_nick, ClientName}, _From, Clients) ->
+	case dict:find(ClientName, Clients) of 
+		{ok, ClientPid} ->
+			ClientPid ! stop,
+			dict:erase(ClientName, Clients);
+		error ->
+			io:format("unkown client: ~p~n", [ClientName]),
+			Clients			
+	end,
+	{reply, ok, Clients};
 
-handle_call({save_message, Addressee, MessageBody}, _From, State) ->
-	store_message(Addressee, MessageBody),
-	{reply, ok, State};
+handle_call({register_nick, ClientName, ClientPid}, _From, Clients) ->
+	Messages = message_db:find_message(ClientName), 
+	lists:foreach(fun(Msg) -> ClientPid ! {print_msg, Msg} end, Messages),
+	{reply, ok, dict:store(ClientName, ClientPid, Clients)};
+
+handle_call({handle_chat_message, ClientName, MessageBody}, _From, Clients) ->
+	case dict:find(ClientName, Clients) of 
+		{ok, ClientPid} -> 
+			ClientPid ! {print_msg, MessageBody};
+		error ->
+			message_db:save_message(ClientName, MessageBody),
+			io:format("message saved for ~p~n", [ClientName])
+	end,
+	{reply, ok, Clients};
 
 handle_call(_Request, _From, State) ->
-  {reply, ignored_message, State}.
+	Reply = ok,
+	{reply, Reply, State}.
 
 %%--------------------------------------------------------------------
 %% Function: handle_cast(Msg, State) -> {noreply, State} |
@@ -96,6 +101,7 @@ handle_call(_Request, _From, State) ->
 %%                                      {stop, Reason, State}
 %% Description: Handling cast messages
 %%--------------------------------------------------------------------
+
 handle_cast(stop, State) ->
 	{stop, normal, State};
 
@@ -109,8 +115,7 @@ handle_cast(_Msg, State) ->
 %% Description: Handling all non call/cast messages
 %%--------------------------------------------------------------------
 handle_info(_Info, State) ->
-	io:format("~p (~p) starting...~n", [?MODULE, self()]),
-	{noreply, State}.
+  {noreply, State}.
 
 %%--------------------------------------------------------------------
 %% Function: terminate(Reason, State) -> void()
@@ -120,7 +125,8 @@ handle_info(_Info, State) ->
 %% The return value is ignored.
 %%--------------------------------------------------------------------
 terminate(_Reason, _State) ->
-	mnesia:stop(),
+	message_db:shutdown(),
+	io:format("message_server going down...~n"),
 	ok.
 
 %%--------------------------------------------------------------------
@@ -133,25 +139,3 @@ code_change(_OldVsn, State, _Extra) ->
 %%--------------------------------------------------------------------
 %%% Internal functions
 %%--------------------------------------------------------------------
-store_message(Addressee, MessageBody) ->
-	F = fun() ->
-		{_, TimeStamp, _} = erlang:now(),
-		mnesia:write(#chat_message{addressee=Addressee, message_body=MessageBody, timestamp=TimeStamp}) end,
-	mnesia:transaction(F).
-
-get_messages(Addressee) ->
-	F = fun() ->
-		Query = qlc:q([M || M <- mnesia:table(chat_message),
-			M#chat_message.addressee =:= Addressee]),
-		Results = qlc:e(Query),
-		delete_messages(Results),
-		lists:map(fun(Msg) -> Msg#chat_message.message_body end, Results)
-	end,
-	{atomic, Messages} = mnesia:transaction(F),
-	Messages.
-
-delete_messages(Messages) ->
-	F = fun() ->
-		lists:foreach(fun(Msg) -> mnesia:delete_object(Msg) end, Messages) 
-	end,
-	mnesia:transaction(F).

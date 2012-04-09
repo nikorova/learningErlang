@@ -1,4 +1,4 @@
--module(message_router_sup).
+-module(message_server_sup).
 
 -behavior(supervisor).
 
@@ -11,8 +11,8 @@ start_link() ->
 
 init([]) ->
 	io:format("~p (~p) starting...~n", [?MODULE, self()]),	
-	MessageRouter = {message_router,{message_router, start_link, []},
-		permanent, 5000, worker, [message_router]},
-	MessageStore = {message_store, {message_store, start_link, []}, 
-		permanent, 5000, worker, [message_store]},
+	MessageServer = {message_server,{message_server, start_link, []},
+		permanent, 5000, worker, [message_server]},
+	MessageDB = {message_db, {message_db, start_link, []}, 
+		permanent, 5000, worker, [message_db]},
 	{ok, {{one_for_all, 5, 30}, [MessageRouter, MessageStore]}}.
