@@ -1,15 +1,18 @@
 %%%-------------------------------------------------------------------
-%%% File        : message_server.erl
-%%% Description : routes messages for the chat application 
+%%% File        : mucc.erl
+%%% Description : multi user chat client
+%%% 								creates proxied chat_client pids from web_server 
+%%%									requests that interact with message_server 
 %%%-------------------------------------------------------------------
--module(message_server).
+-module(mucc).
 
 -behaviour(gen_server).
 
 %% API
--export([start_link/0, handle_chat_message/2, register_nick/2, unregister_nick/1, stop/0]).
+-export([start_link/0, register_nickname/1, unregister_nickname/1, poll/1, send_message/3]).
 
 -define(SERVER, ?MODULE).
+
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -25,17 +28,27 @@
 start_link() ->
 	gen_server:start_link({global, ?SERVER}, ?MODULE, [], []).
 
-stop() ->
-	gen_server:cast({global, ?SERVER}, stop).
+register_nickname(Nickname) ->
+  case gen_server:call({global, ?SERVER}, {register, Nickname}) of
+    ok ->
+      ok;
+    {error, Error} ->
+      Error
+  end.
 
-handle_chat_message(Addressee, MessageBody) ->
-	gen_server:call({global, ?SERVER}, {handle_chat_message, Addressee, MessageBody}).
+unregister_nickname(Nickname) ->
+	gen_server:cast({global, ?SERVER}, {unregister, Nickname}).
 
-register_nick(ClientName, ClientPid) ->
-	gen_server:call({global, ?SERVER}, {register_nick, ClientName, ClientPid}).
+poll(Nickname) ->
+  case gen_server:call({global, ?SERVER}, {poll, Nickname}) of
+    {ok, Messages} ->
+      Messages;
+    Error ->
+      Error
+  end.
 
-unregister_nick(ClientName) ->
-	gen_server:call({global, ?SERVER}, {unregister_nick, ClientName}).
+send_message(Sender, Addressee, Message) ->
+	gen_server:cast({global, ?SERVER}, {send_message, Sender, Addressee, Message}).
 
 
 %%====================================================================
@@ -51,7 +64,6 @@ unregister_nick(ClientName) ->
 %%--------------------------------------------------------------------
 init([]) ->
 	io:format("~p (~p) starting...~n", [?MODULE, self()]),
-	process_flag(trap_exit, true),
 	{ok, dict:new()}.
 
 %%--------------------------------------------------------------------
@@ -63,31 +75,30 @@ init([]) ->
 %%                                      {stop, Reason, State}
 %% Description: Handling call messages
 %%--------------------------------------------------------------------
-handle_call({unregister_nick, ClientName}, _From, Clients) ->
-	case dict:find(ClientName, Clients) of 
-		{ok, ClientPid} ->
-			ClientPid ! stop,
-			dict:erase(ClientName, Clients);
-		error ->
-			io:format("unkown client: ~p~n", [ClientName]),
-			Clients			
-	end,
-	{reply, ok, Clients};
+handle_call({register, Nickname}, _From, State) ->
+  case dict:find(Nickname, State) of
+    error ->
+      Pid = spawn(fun() ->
+		      process_flag(trap_exit, true),
+		      proxy_client([]) end),
+      erlang:monitor(process, Pid),
+      message_server:register_nick(Nickname, Pid),
+      {reply, ok, dict:store(Nickname, Pid, State)};
+    {ok, _} ->
+      {reply, {error, duplicate_nick_found}, State}
+  end;
 
-handle_call({register_nick, ClientName, ClientPid}, _From, Clients) ->
-	Messages = message_db:find_message(ClientName), 
-	lists:foreach(fun(Msg) -> ClientPid ! {print_msg, Msg} end, Messages),
-	{reply, ok, dict:store(ClientName, ClientPid, Clients)};
-
-handle_call({handle_chat_message, ClientName, MessageBody}, _From, Clients) ->
-	case dict:find(ClientName, Clients) of 
-		{ok, ClientPid} -> 
-			ClientPid ! {print_msg, MessageBody};
-		error ->
-			message_db:save_message(ClientName, MessageBody),
-			io:format("message saved for ~p~n", [ClientName])
-	end,
-	{reply, ok, Clients};
+handle_call({poll, Nickname}, _From, State)->
+  case dict:find(Nickname, State) of
+    error ->
+      {reply, {error, unknown_nick}, State};
+    {ok, Pid} ->
+      Pid ! {get_messages, self()},
+      receive
+      	{messages, Messages} ->
+      	  {reply, {ok, Messages}, State}
+      end
+  end;
 
 handle_call(_Request, _From, State) ->
 	Reply = ok,
@@ -99,9 +110,24 @@ handle_call(_Request, _From, State) ->
 %%                                      {stop, Reason, State}
 %% Description: Handling cast messages
 %%--------------------------------------------------------------------
+handle_cast({unregister, Nickname}, State) ->
+  NewState = case dict:find(Nickname, State) of
+	       error ->
+		 State;
+	       {ok, Pid} ->
+		 Pid ! stop,
+		 dict:erase(Nickname, State)
+	     end,
+  {noreply, NewState};
 
-handle_cast(stop, State) ->
-	{stop, normal, State};
+handle_cast({send_message, Sender, Addressee, Message}, State) ->
+  case dict:find(Sender, State) of
+    error ->
+      ok;
+    {ok, Pid} ->
+      Pid ! {send_message, Addressee, Message}
+  end,
+  {noreply, State};
 
 handle_cast(_Msg, State) ->
 	{noreply, State}.
@@ -113,7 +139,7 @@ handle_cast(_Msg, State) ->
 %% Description: Handling all non call/cast messages
 %%--------------------------------------------------------------------
 handle_info(_Info, State) ->
-  {noreply, State}.
+	{noreply, State}.
 
 %%--------------------------------------------------------------------
 %% Function: terminate(Reason, State) -> void()
@@ -123,8 +149,6 @@ handle_info(_Info, State) ->
 %% The return value is ignored.
 %%--------------------------------------------------------------------
 terminate(_Reason, _State) ->
-	message_db:shutdown(),
-	io:format("message_server going down...~n"),
 	ok.
 
 %%--------------------------------------------------------------------
@@ -137,3 +161,17 @@ code_change(_OldVsn, State, _Extra) ->
 %%--------------------------------------------------------------------
 %%% Internal functions
 %%--------------------------------------------------------------------
+proxy_client(Messages) ->
+  receive
+    {printmsg, MessageBody} ->
+      proxy_client([MessageBody|Messages]);
+    {get_messages, Caller} ->
+      Caller ! {messages, lists:reverse(Messages)},
+      proxy_client([]);
+    {send_message, Addressee, Message} ->
+      message_server:send_chat_message(Addressee, Message),
+      proxy_client(Messages);
+    stop ->
+      io:format("Proxy stopping...~n"),
+      ok
+  end.

@@ -1,15 +1,16 @@
 %%%-------------------------------------------------------------------
-%%% File        : message_server.erl
-%%% Description : routes messages for the chat application 
+%%% File        : web_server.erl
+%%% Description : web server proxies requests to mucc
 %%%-------------------------------------------------------------------
--module(message_server).
+-module(web_server).
 
 -behaviour(gen_server).
 
 %% API
--export([start_link/0, handle_chat_message/2, register_nick/2, unregister_nick/1, stop/0]).
+-export([start_link/1, stop/0, dispatch_requests/1]).
 
 -define(SERVER, ?MODULE).
+-define(OK, <<"ok">>).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -22,21 +23,16 @@
 %% Function: start_link() -> {ok,Pid} | ignore | {error,Error}
 %% Description: Starts the server
 %%--------------------------------------------------------------------
-start_link() ->
-	gen_server:start_link({global, ?SERVER}, ?MODULE, [], []).
+start_link(Port) ->
+	gen_server:start_link({local, ?SERVER}, ?MODULE, [Port], []).
 
 stop() ->
-	gen_server:cast({global, ?SERVER}, stop).
+	gen_server:cast(?SERVER, stop).
 
-handle_chat_message(Addressee, MessageBody) ->
-	gen_server:call({global, ?SERVER}, {handle_chat_message, Addressee, MessageBody}).
-
-register_nick(ClientName, ClientPid) ->
-	gen_server:call({global, ?SERVER}, {register_nick, ClientName, ClientPid}).
-
-unregister_nick(ClientName) ->
-	gen_server:call({global, ?SERVER}, {unregister_nick, ClientName}).
-
+dispatch_requests(Req) ->
+	Path = Req:get(path),
+	Action = clean_path(Path),
+	handle(Action, Req).
 
 %%====================================================================
 %% gen_server callbacks
@@ -49,10 +45,16 @@ unregister_nick(ClientName) ->
 %%                         {stop, Reason}
 %% Description: Initiates the server
 %%--------------------------------------------------------------------
-init([]) ->
+init([Port]) ->
 	io:format("~p (~p) starting...~n", [?MODULE, self()]),
-	process_flag(trap_exit, true),
-	{ok, dict:new()}.
+  mochiweb_http:start([
+  	{port, Port},
+    {loop, fun(Req) ->
+			dispatch_requests(Req) end}
+	]),
+  erlang:monitor(process, mochiweb_http),
+  {ok, []}.
+
 
 %%--------------------------------------------------------------------
 %% Function: %% handle_call(Request, From, State) -> {reply, Reply, State} |
@@ -63,32 +65,6 @@ init([]) ->
 %%                                      {stop, Reason, State}
 %% Description: Handling call messages
 %%--------------------------------------------------------------------
-handle_call({unregister_nick, ClientName}, _From, Clients) ->
-	case dict:find(ClientName, Clients) of 
-		{ok, ClientPid} ->
-			ClientPid ! stop,
-			dict:erase(ClientName, Clients);
-		error ->
-			io:format("unkown client: ~p~n", [ClientName]),
-			Clients			
-	end,
-	{reply, ok, Clients};
-
-handle_call({register_nick, ClientName, ClientPid}, _From, Clients) ->
-	Messages = message_db:find_message(ClientName), 
-	lists:foreach(fun(Msg) -> ClientPid ! {print_msg, Msg} end, Messages),
-	{reply, ok, dict:store(ClientName, ClientPid, Clients)};
-
-handle_call({handle_chat_message, ClientName, MessageBody}, _From, Clients) ->
-	case dict:find(ClientName, Clients) of 
-		{ok, ClientPid} -> 
-			ClientPid ! {print_msg, MessageBody};
-		error ->
-			message_db:save_message(ClientName, MessageBody),
-			io:format("message saved for ~p~n", [ClientName])
-	end,
-	{reply, ok, Clients};
-
 handle_call(_Request, _From, State) ->
 	Reply = ok,
 	{reply, Reply, State}.
@@ -99,7 +75,6 @@ handle_call(_Request, _From, State) ->
 %%                                      {stop, Reason, State}
 %% Description: Handling cast messages
 %%--------------------------------------------------------------------
-
 handle_cast(stop, State) ->
 	{stop, normal, State};
 
@@ -112,8 +87,11 @@ handle_cast(_Msg, State) ->
 %%                                       {stop, Reason, State}
 %% Description: Handling all non call/cast messages
 %%--------------------------------------------------------------------
+handle_info({'DOWN', _, _, {mochiweb_http, _}, _}, State) ->
+	{stop, normal, State};
+
 handle_info(_Info, State) ->
-  {noreply, State}.
+	{noreply, State}.
 
 %%--------------------------------------------------------------------
 %% Function: terminate(Reason, State) -> void()
@@ -123,8 +101,7 @@ handle_info(_Info, State) ->
 %% The return value is ignored.
 %%--------------------------------------------------------------------
 terminate(_Reason, _State) ->
-	message_db:shutdown(),
-	io:format("message_server going down...~n"),
+	mochiweb_http:stop(),
 	ok.
 
 %%--------------------------------------------------------------------
@@ -137,3 +114,62 @@ code_change(_OldVsn, State, _Extra) ->
 %%--------------------------------------------------------------------
 %%% Internal functions
 %%--------------------------------------------------------------------
+handle("/send", Req) ->
+  Params = Req:parse_qs(),
+  Sender = proplists:get_value("nick", Params),
+  Addressee = proplists:get_value("to", Params),
+  Message = proplists:get_value("msg", Params),
+  mucc:send_message(Sender, Addressee, Message),
+  success(Req, ?OK);
+
+handle("/poll", Req) ->
+  Params = Req:parse_qs(),
+  Nickname = proplists:get_value("nick", Params),
+  case mucc:poll(Nickname) of
+    {error, Error} ->
+      failure(Req, subst("Error: ~s~n", Error));
+    Messages ->
+      case length(Messages) == 0 of
+	true ->
+	  success(Req, <<"none">>);
+	false ->
+	  Template = lists:foldl(fun(_, Acc) -> ["~s~n"|Acc] end, [], Messages),
+	  success(Req, subst(lists:flatten(Template), Messages))
+      end
+  end;
+
+handle("/unregister", Req) ->
+  Params = Req:parse_qs(),
+  Nickname = proplists:get_value("nick", Params),
+  mucc:unregister_nickname(Nickname),
+  success(Req, ?OK);
+
+handle("/register", Req) ->
+  Params = Req:parse_qs(),
+  Nickname = proplists:get_value("nick", Params),
+  case mucc:register_nickname(Nickname) of
+    ok ->
+      success(Req, ?OK);
+    Error ->
+      failure(Req, subst("Error: ~s", [Error]))
+  end;
+
+handle(_, Req) ->
+  Req:respond(not_found).
+
+failure(Req, Body) when is_binary(Body) ->
+  Req:respond({500, [{"Content-Type", "text/plain"}], Body}).
+
+success(Req, Body) when is_binary(Body) ->
+  Req:respond({200, [{"Content-Type", "text/plain"}], Body}).
+
+subst(Template, Values) when is_list(Values) ->
+  list_to_binary(lists:flatten(io_lib:fwrite(Template, Values))).
+
+clean_path(Path) ->
+  case string:str(Path, "?") of
+    0 ->
+      Path;
+    N ->
+      string:substr(Path, 1, string:len(Path) - (N + 1))
+  end.

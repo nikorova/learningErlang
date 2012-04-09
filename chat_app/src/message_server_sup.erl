@@ -15,4 +15,4 @@ init([]) ->
 		permanent, 5000, worker, [message_server]},
 	MessageDB = {message_db, {message_db, start_link, []}, 
 		permanent, 5000, worker, [message_db]},
-	{ok, {{one_for_all, 5, 30}, [MessageRouter, MessageStore]}}.
+	{ok, {{one_for_all, 5, 30}, [MessageServer, MessageDB]}}.
